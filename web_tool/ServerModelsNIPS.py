@@ -299,7 +299,7 @@ class KerasBackPropFineTune(BackendModel):
 
         self.model.compile(optimizers.Adam(lr=0.01, decay=1e-6), "categorical_crossentropy")
         
-        # pdb.set_trace()
+        pdb.set_trace()
             
         for i in range(train_steps):
             for batch_x, batch_y in zip(self.batch_x, self.batch_y):
