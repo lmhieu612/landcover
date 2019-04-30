@@ -5,6 +5,7 @@ import torch.nn as nn
 from training.pytorch.models.fusionnet import Fusionnet
 from training.pytorch.models.unet import Unet
 import os, json
+import pdb
 from torch.autograd import Variable
 
 def softmax(output):
@@ -16,7 +17,7 @@ def softmax(output):
 class multiclass_ce(nn.modules.Module):
     def __init__(self):
         super(multiclass_ce, self).__init__()
-        self.crossentropy = nn.CrossEntropyLoss()
+        self.crossentropy = nn.CrossEntropyLoss(ignore_index = 0, size_average=True)
 
     def __call__(self,y_true, y_pred):
         loss = self.crossentropy(y_pred, y_true)
@@ -31,6 +32,7 @@ class GroupParams(nn.Module):
         self.model = model
 
     def forward(self, x):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         x, conv1_out, conv1_dim = self.model.down_1(x)
 
 
@@ -46,8 +48,8 @@ class GroupParams(nn.Module):
         # betas[0, 16:24, 0, 0] = self.betas.detach().numpy()[2]
         # betas[0, 24:32, 0, 0] = self.betas.detach().numpy()[3]
 
-       # gammas = torch.Tensor(gammas).to('cuda')
-       # betas = torch.Tensor(betas).to('cuda')
+        self.gammas.to(device)
+        self.betas.to(device)
 
 
         x, conv2_out, conv2_dim = self.model.down_2(x)
@@ -63,7 +65,7 @@ class GroupParams(nn.Module):
         x = self.model.up_2(x, conv3_out, conv3_dim)
         x = self.model.up_3(x, conv2_out, conv2_dim)
         x = self.model.up_4(x, conv1_out, conv1_dim)
-        x = x * self.gammas + self.betas
+        x = x * self.gammas.to(device) + self.betas.to(device)
 
         return self.model.conv_final(x)
 
@@ -74,7 +76,7 @@ class UnetgnFineTune(BackendModel):
         os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpuid)
         self.output_channels = 5
-        self.input_size = 512
+        self.input_size = 240
         self.model_fn = model_fn
         self.opts = json.load(open("/mnt/blobfuse/train-output/conditioning/models/backup_unet_gn_isotropic_nn8/training/params.json", "r"))["model_opts"]
         self.inf_framework = InferenceFramework(Unet, self.opts)
@@ -125,6 +127,9 @@ class UnetgnFineTune(BackendModel):
         self.batch_y = []
         self.num_corrected_pixels = 0
         self.batch_count = 0
+        self.run_done = False
+        self.rows =0
+        self.cols =0
 
     def run(self, naip_data, naip_fn, extent, padding):
 
@@ -141,6 +146,10 @@ class UnetgnFineTune(BackendModel):
           #  naip_data_trimmed = naip_data[:, padding:-padding, padding:-padding]
           #  output_trimmed = output[:, padding:-padding, padding:-padding]
         self.naip_data = naip_data  # keep non-trimmed size, i.e. with padding
+        if not self.run_done:
+            self.run_done = True
+            self.rows = naip_data.shape[1]+2
+            self.cols = naip_data.shape[2]+2
         self.correction_labels = np.zeros((naip_data.shape[1], naip_data.shape[2], self.output_channels),
                                           dtype=np.float32)
 
@@ -148,15 +157,12 @@ class UnetgnFineTune(BackendModel):
         return output
 
 #FIXME: add retrain method
-    def retrain(self, train_steps=10, corrections_from_ui=True, learning_rate=0.01):
+    def retrain(self, train_steps=6, corrections_from_ui=True, learning_rate=0.007):
         num_labels = np.count_nonzero(self.correction_labels)
-        print("Fitting model with %d new labels" % num_labels)
+      #  print("Fine tuning group norm params with %d new labels. 4 Groups, 8 Params" % num_labels)
 
         height = self.naip_data.shape[1]
         width = self.naip_data.shape[2]
-
-        batch_x = []
-        batch_y = []
         batch_count = 0
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -170,59 +176,73 @@ class UnetgnFineTune(BackendModel):
                 for j in range(correction_labels.shape[1]):
                     label_index = self.last_output[i][j].argmax()
                     correction_labels[i, j, label_index + 1] = 1.0
-
-        for y_index in (list(range(0, height - self.input_size, self.stride_y)) + [height - self.input_size, ]):
-            for x_index in (list(range(0, width - self.input_size, self.stride_x)) + [width - self.input_size, ]):
-                naip_im = self.naip_data[:, y_index:y_index + self.input_size, x_index:x_index + self.input_size]
-                correction_labels_slice = correction_labels[y_index:y_index + self.input_size,
-                                          x_index:x_index + self.input_size, :]
-                # correction_labels = test_correction_labels[y_index:y_index+self.input_size, x_index:x_index+self.input_size, :]
-
-                batch_x.append(naip_im)
-                batch_y.append(correction_labels_slice)
-
-                batch_count += 1
-                number_corrected_pixels += len(correction_labels_slice.nonzero()[0])
-
-        self.batch_x.append(batch_x)
-        self.batch_y.append(batch_y)
-        self.num_corrected_pixels += number_corrected_pixels
-        self.batch_count += batch_count
-
-        batch_arr_x = np.zeros((batch_count, 4, self.input_size, self.input_size))
-        batch_arr_y = np.zeros((batch_count, self.input_size, self.input_size))
-        i, j = 0, 0
-        for im in batch_x:
-            batch_arr_x[i, :, :, :] = im
-            i += 1
-        batch_x = torch.from_numpy(batch_arr_x).float().to(device)
-        for y in batch_y:
-            batch_arr_y[j, :, :] = np.argmax(y, axis=2)
-            j += 1
-        batch_y = torch.from_numpy(batch_arr_y).float().to(device)
-
-        optimizer = torch.optim.Adam(self.augment_model.parameters(), lr=0.01)
+        batch_xi = np.zeros((4, self.rows, self.cols))
+        batch_xi[:,:height, :width] = self.naip_data
+        batch_yi =  np.zeros((self.rows, self.cols))
+        batch_yi[:height, :width] = np.argmax(correction_labels, axis=2)
+        if(num_labels>0):
+        #    batch_x = []
+         #   batch_y = []
+          #  batch_x = self.naip_data
+           # batch_y = np.argmax(correction_labels,axis=2)
+            self.batch_x.append(batch_xi)
+            self.batch_y.append(batch_yi)
+            self.num_corrected_pixels += number_corrected_pixels
+            self.batch_count += batch_count
+        print("Fine tuning group norm params with %d new labels. 4 Groups, 8 Params" % self.num_corrected_pixels)
+       # batch_arr_x = np.zeros((batch_count, 4, self.input_size, self.input_size))
+        #batch_arr_y = np.zeros((batch_count, self.input_size, self.input_size))
+#        pdb.set_trace()
+        batch_x = np.array(self.batch_x)
+        print(batch_x.shape)
+        number_windows, channels, rows , cols = batch_x.shape
+        #batch_x = torch.from_numpy(batch_x).float().to(device)
+        batch_y = np.array(self.batch_y)
+        print("y_shape", batch_y.shape)
+        batch_y = torch.from_numpy(batch_y).float().to(device)
+        #batch_y = torch.from_numpy(batch_y).float().to(device) 
+        print("batch shape", batch_x.shape)
+        print("y batch shape", batch_y.shape)
+        self.augment_model = GroupParams(self.inf_framework.model)
+        optimizer = torch.optim.Adam(self.augment_model.parameters(), lr=learning_rate, eps=1e-5)
         optimizer.zero_grad()
         criterion = multiclass_ce().to(device)
-        # pdb.set_trace()
+#        pdb.set_trace()
+        
 
         for i in range(train_steps):
-            with torch.set_grad_enabled(True):
-                outputs = self.augment_model.forward(batch_x[:, :, 2:240 - 2, 2:240 - 2])
-                loss = criterion(torch.squeeze(batch_y[:, 94:240 - 94, 94:240 - 94],1).long(), outputs)
-                loss.backward()
-                optimizer.step()
+            for j in range(number_windows):
+                with torch.set_grad_enabled(True):
+                    norm_image = (batch_x[j])
+                    _, w, h = norm_image.shape
+                    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+                    out = torch.zeros((5, w, h))
 
-        # pdb.set_trace()
+                    norm_image1 = norm_image[:, 130:w - (w % 892) + 130, 130:h - (h % 892) + 130]
+                    x_c_tensor1 = torch.from_numpy(norm_image1).float().to(device)
+                    y_pred1 = self.augment_model.forward(x_c_tensor1.unsqueeze(0))
+                 #   y_hat1 = (Variable(y_pred1).data).cpu().numpy()
+                    out[:, 92 + 130:w - (w % 892) + 130 - 92, 92 + 130:h - (h % 892) - 92 + 130] = y_pred1
+        
+                    outputs = out.float().to(device)
+                   # print(outputs.shape)
+                    #print(batch_y[j].shape)
+                    loss = criterion(torch.unsqueeze(batch_y[j],0).long(), torch.unsqueeze(outputs,0))
+                    print(loss.item())
+                    loss.backward()
+                    optimizer.step()
+
+        #pdb.set_trace()
 
         success = True
-        message = "Re-trained model with %d samples" % num_labels
+        message = "Fine-tuned Group norm params with %d samples. 4 Groups. 8 params, 1 layer." % self.num_corrected_pixels
+        print(message)
 
         return success, message
 
     def add_sample(self, tdst_row, bdst_row, tdst_col, bdst_col, class_idx):
         padding = self.tile_padding
-
+        print("adding sample ", tdst_row)
         self.correction_labels[tdst_row + padding: bdst_row + 1 + padding,
         tdst_col + padding: bdst_col + 1 + padding, :] = 0.0
         self.correction_labels[tdst_row + padding: bdst_row + 1 + padding,
@@ -234,6 +254,10 @@ class UnetgnFineTune(BackendModel):
         #self.augment_y_train = []
         self.augment_model = GroupParams(self.inf_framework.model)
         self.augment_model_trained = False
+        self.batch_x = []
+        self.batch_y = []
+        self.run_done = False
+        self.num_corrected_pixels = 0
 
         #for row in self.augment_base_x_train:
         #    self.augment_x_train.append(row)
@@ -392,9 +416,9 @@ class FusionnetgnFineTune(BackendModel):
         return output
 
 #FIXME: add retrain method
-    def retrain(self, train_steps=10, corrections_from_ui=True, learning_rate=0.01):
+    def retrain(self, train_steps=5, corrections_from_ui=True, learning_rate=0.03):
         num_labels = np.count_nonzero(self.correction_labels)
-        print("Fitting model with %d new labels" % num_labels)
+        print("Fine-tuning Group norm params with %d new labels" % num_labels)
 
         height = self.naip_data.shape[1]
         width = self.naip_data.shape[2]
@@ -445,7 +469,7 @@ class FusionnetgnFineTune(BackendModel):
             j += 1
         batch_y = torch.from_numpy(batch_arr_y).float().to(device)
 
-        optimizer = torch.optim.Adam(self.augment_model.parameters(), lr=0.01)
+        optimizer = torch.optim.Adam(self.augment_model.parameters(), lr=learning_rate)
         optimizer.zero_grad()
         criterion = multiclass_ce().to(device)
         # pdb.set_trace()
