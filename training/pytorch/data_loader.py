@@ -10,13 +10,13 @@ class DataGenerator(data.Dataset):
     'Generates data for pytorch'
     # def __init__(self, list_IDs, labels, batch_size=32, dim=(32,32,32), n_channels=1, n_classes=10, shuffle=True):
     def __init__(self, patches, batch_size, patch_size, num_channels, transform = None, superres=False,
-                 superres_states=[]):
+                 superres_states=[], masking=False):
         'Initialization'
-        if not transform:
-            if superres:
-                transform = lambda x, y_hr_batch, y_sr_batch: (x, y_hr_batch, y_sr_batch)
-            else:
-                transform = lambda x, y_hr_batch: (x, y_hr_batch)
+        #if not transform:
+        #    if superres:
+        #        transform = lambda x, y_hr_batch, y_sr_batch, mask: (x, y_hr_batch, y_sr_batch, mask)
+        #    else:
+        #        transform = lambda x, y_hr_batch, mask: (x, y_hr_batch, mask)
         self.patches = patches
         self.batch_size = batch_size
         self.transform = transform
@@ -28,6 +28,7 @@ class DataGenerator(data.Dataset):
         self.superres = superres
         self.superres_states = superres_states
         self.on_epoch_end()
+        self.masking = masking
 
     def __len__(self):
         'Denotes the number of batches per epoch'
@@ -44,11 +45,16 @@ class DataGenerator(data.Dataset):
         data = np.load(self.patches[index]).squeeze()
         data = np.rollaxis(data, 0, 3)
 
+        
+        if self.masking:
+            masks = np.load(self.patches[index].replace('.npy', '-mask.npy'))
+            
             # setup x
             #x_batch[i] = data[:, :, :4]
         x = np.transpose(data[:, :, :4], (2, 0, 1))
 
             # setup y_highres
+        # Collapse larger class space down to 4+1 primary classes {unknown, water, forest, field, built}
         y_train_hr = data[:, :, 4]
         y_train_hr[y_train_hr == 15] = 0
         y_train_hr[y_train_hr == 5] = 4
@@ -69,9 +75,15 @@ class DataGenerator(data.Dataset):
            # y_train_nlcd = to_categorical(y_train_nlcd, 22)
 
         if self.superres:
-            return self.transform(torch.from_numpy(x.copy()), torch.from_numpy(np.expand_dims(y_train_hr,0)), torch.from_numpy(np.expand_dims(y_train_nlcd,0)))
+            if self.masking:
+                return (torch.from_numpy(x.copy()), torch.from_numpy(np.expand_dims(y_train_hr,0)), torch.from_numpy(np.expand_dims(y_train_nlcd,0)), masks)
+            else:
+                return (torch.from_numpy(x.copy()), torch.from_numpy(np.expand_dims(y_train_hr,0)), torch.from_numpy(np.expand_dims(y_train_nlcd,0)))
         else:
-            return self.transform(torch.from_numpy(x.copy()), torch.from_numpy(np.expand_dims(y_train_hr,0)))
+            if self.masking:
+                return (torch.from_numpy(x.copy()), torch.from_numpy(np.expand_dims(y_train_hr,0)), masks)
+            else:
+                return (torch.from_numpy(x.copy()), torch.from_numpy(np.expand_dims(y_train_hr,0)))
 
     def on_epoch_end(self):
         self.indices = np.arange(len(self.patches))
