@@ -9,6 +9,9 @@ from keras import optimizers
 
 from ServerModelsAbstract import BackendModel
 
+from web_tool.frontend_server import ROOT_DIR
+
+
 AUGMENT_MODEL = MLPClassifier(
     hidden_layer_sizes=(),
     activation='relu',
@@ -69,11 +72,11 @@ class KerasDenseFineTune(BackendModel):
         seed_x_fn = ""
         seed_y_fn = ""
         if superres:
-            seed_x_fn = "web-tool/data/seed_data_hr+sr_x.npy"
-            seed_y_fn = "web-tool/data/seed_data_hr+sr_y.npy"
+            seed_x_fn = ROOT_DIR + "/data/seed_data_hr+sr_x.npy"
+            seed_y_fn = ROOT_DIR + "/data/seed_data_hr+sr_y.npy"
         else:
-            seed_x_fn = "web-tool/data/seed_data_hr_x.npy"
-            seed_y_fn = "web-tool/data/seed_data_hr_y.npy"
+            seed_x_fn = ROOT_DIR + "/data/seed_data_hr_x.npy"
+            seed_y_fn = ROOT_DIR + "/data/seed_data_hr_y.npy"
         for row in np.load(seed_x_fn):
             self.augment_base_x_train.append(row)
         for row in np.load(seed_y_fn):
@@ -296,7 +299,7 @@ class KerasBackPropFineTune(BackendModel):
 
         self.model.compile(optimizers.SGD(lr=learning_rate, decay=1e-6), "categorical_crossentropy")
         
-        # pdb.set_trace()
+        pdb.set_trace()
             
         for i in range(train_steps):
             for batch_x, batch_y in zip(self.batch_x, self.batch_y):
