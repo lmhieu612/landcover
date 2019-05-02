@@ -149,17 +149,10 @@ class UnetgnFineTune(BackendModel):
         return output
 
 #FIXME: add retrain method
-<<<<<<< HEAD:web-tool/ServerModelsNIPSGroupNorm.py
-    def retrain(self, train_steps=25, corrections_from_ui=True, learning_rate=0.004):
-        num_labels = np.count_nonzero(self.correction_labels)
-        print("Fine tuning group norm params with %d new labels. 4 Groups, 8 Params" % num_labels)
-
-=======
     def retrain(self, train_steps=15, corrections_from_ui=True, learning_rate=0.003):
         print('In retrain')
         num_labels = np.count_nonzero(self.correction_labels)
-        
->>>>>>> 990ad3c8672fbda26361a163b43f1dffaaa19f09:web_tool/ServerModelsNIPSGroupNorm.py
+
         height = self.naip_data.shape[1]
         width = self.naip_data.shape[2]
         batch_count = 0
@@ -175,41 +168,6 @@ class UnetgnFineTune(BackendModel):
                 for j in range(correction_labels.shape[1]):
                     label_index = self.last_output[i][j].argmax()
                     correction_labels[i, j, label_index + 1] = 1.0
-<<<<<<< HEAD:web-tool/ServerModelsNIPSGroupNorm.py
-
-        for y_index in (list(range(0, height - self.input_size, self.stride_y)) + [height - self.input_size, ]):
-            for x_index in (list(range(0, width - self.input_size, self.stride_x)) + [width - self.input_size, ]):
-                naip_im = self.naip_data[:, y_index:y_index + self.input_size, x_index:x_index + self.input_size]
-                correction_labels_slice = correction_labels[y_index:y_index + self.input_size,
-                                          x_index:x_index + self.input_size, :]
-                # correction_labels = test_correction_labels[y_index:y_index+self.input_size, x_index:x_index+self.input_size, :]
-                #if (correction_labels_slice.shape[0] == naip_im.shape[1] and correction_labels_slice.shape[1] == naip_im.shape[2]):
-                batch_x.append(naip_im)
-                batch_y.append(correction_labels_slice)
-                batch_count += 1
-                number_corrected_pixels += len(correction_labels_slice.nonzero()[0])
-
-        self.batch_x.append(batch_x)
-        self.batch_y.append(batch_y)
-        self.num_corrected_pixels += number_corrected_pixels
-        self.batch_count += batch_count
-
-        batch_arr_x = np.zeros((batch_count, 4, self.input_size, self.input_size))
-        batch_arr_y = np.zeros((batch_count, self.input_size, self.input_size))
-        i, j = 0, 0
-        for im in batch_x:
-            batch_arr_x[i, :, :, :] = im
-            i += 1
-        batch_x = torch.from_numpy(batch_arr_x).float().to(device)
-        for y in batch_y:
-            batch_arr_y[j, :, :] = np.argmax(y, axis=2)
-            j += 1
-        batch_y = torch.from_numpy(batch_arr_y).float().to(device)
-
-        learning_rate *= (self.input_size * self.input_size * len(batch_x) * len(self.batch_x)) / self.num_corrected_pixels
-
-        optimizer = torch.optim.Adam(self.augment_model.parameters(), lr=learning_rate, eps=1e-5)
-=======
         batch_xi = np.zeros((4, self.rows, self.cols))
         batch_xi[:,:height, :width] = self.naip_data
         batch_yi =  np.zeros((self.rows, self.cols))
@@ -226,7 +184,6 @@ class UnetgnFineTune(BackendModel):
         batch_y = torch.from_numpy(batch_y).float().to(device)
         self.init_model()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate, eps=1e-5)
->>>>>>> 990ad3c8672fbda26361a163b43f1dffaaa19f09:web_tool/ServerModelsNIPSGroupNorm.py
         optimizer.zero_grad()
         criterion = multiclass_ce().to(device)
 
@@ -252,13 +209,8 @@ class UnetgnFineTune(BackendModel):
                     optimizer.step()
 
         success = True
-<<<<<<< HEAD:web-tool/ServerModelsNIPSGroupNorm.py
-        message = "Fine-tuned Group norm params with %d samples. 4 Groups. 8 params, 1 layer." % num_labels
-=======
         message = "Fine-tuned Group norm params with %d samples. 4 Groups. 8 params, 1 layer." % self.num_corrected_pixels
         print(message)
->>>>>>> 990ad3c8672fbda26361a163b43f1dffaaa19f09:web_tool/ServerModelsNIPSGroupNorm.py
-
         return success, message
 
     def add_sample(self, tdst_row, bdst_row, tdst_col, bdst_col, class_idx):
@@ -543,11 +495,7 @@ class FusionnetgnFineTune(BackendModel):
             j += 1
         batch_y = torch.from_numpy(batch_arr_y).float().to(device)
 
-<<<<<<< HEAD:web-tool/ServerModelsNIPSGroupNorm.py
-        optimizer = torch.optim.Adam(self.augment_model.parameters(), lr=learning_rate)
-=======
         optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
->>>>>>> 990ad3c8672fbda26361a163b43f1dffaaa19f09:web_tool/ServerModelsNIPSGroupNorm.py
         optimizer.zero_grad()
         criterion = multiclass_ce().to(device)
         # pdb.set_trace()
